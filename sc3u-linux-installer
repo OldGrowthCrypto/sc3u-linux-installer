@@ -1,0 +1,5 @@
+#!/bin/sh
+# Run from the source tree: ./sc3u-linux-installer [--add-files]   or   ./sc3u-linux-installer cli status
+D="$(dirname "$(readlink -f "$0")")"
+export SC3U_INSTALLER_SHARE="${SC3U_INSTALLER_SHARE:-$D}"
+PYTHONPATH="$D/src${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m sc3u_installer "$@"

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.sc3u_linux_installer</id>
+  <name>SC3U Linux Installer</name>
+  <summary>Install the native Linux edition of SimCity 3000 Unlimited from your own disc</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>An unofficial community installer for the Loki Linux edition of SimCity 3000 Unlimited on modern distributions. It adds the 2.0a update, a compatibility runtime, a launcher and working sound through osspd and PipeWire.</p>
+    <p>No game data is included. You need your own Linux edition disc or ISO. You can also install the runtime first and add the game files later.</p>
+  </description>
+  <launchable type="desktop-id">io.github.sc3u_linux_installer.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <releases><release version="0.1.0" date="2026-10-28"/></releases>
+</component>

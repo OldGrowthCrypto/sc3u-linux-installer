@@ -1,0 +1,127 @@
+#!/bin/bash
+# SC3U launcher (SC3U Linux Installer). SPDX-License-Identifier: GPL-3.0-or-later
+# Based on the community sc3u launcher. Per user install in ~/.local/share/sc3u-linux/game.
+# Env overrides (all optional):
+#   SC3U_FULLSCREEN=1|0      fullscreen (default from installer option, on). 1: gamescope if installed, else SDL -fullscreen
+#   SC3U_MODE=auto|gamescope|window|fullscreen  auto: gamescope if installed, else window
+#   SC3U_RES=1280x1024       game resolution 800x600/1024x768/1280x1024 (auto = 1280x1024, the highest the game supports);
+#                            the launcher writes it into ~/.loki/sc3u/sc3.cfg so the game and gamescope always agree
+#   SC3U_FILTER=fsr|linear|nearest|pixel   gamescope upscaler (default fsr)
+#   SC3U_SCALE=fit|integer|stretch         gamescope scaling (default fit = 4:3 with black bars)
+#   SC3U_CPUS=2              pin game to these CPU(s) (taskset list); empty = no pinning
+#   SC3U_AUDIO=auto|oss|none  SC3U_INTRO=1 (play intro; off by default)  SC3U_GAMEMODE=0 (disable gamemoderun)  SC3U_BACKUPS=10 (0=off)
+#   SC3U_PERF="1000 512 10 10" (empty disables)   SC3U_ARGS="..." extra game args
+GAMEDIR="${SC3U_GAMEDIR:-${XDG_DATA_HOME:-$HOME/.local/share}/sc3u-linux/game}"
+case "$(basename "$0")" in *bat*) BIN=sc3bat ;; *) BIN=sc3u ;; esac
+FS="${SC3U_FULLSCREEN:-$(grep -q '"fullscreen": false' "$GAMEDIR/.sc3u-install.json" 2>/dev/null && echo 0 || echo 1)}"
+MODE="${SC3U_MODE:-auto}"; RES="${SC3U_RES:-$(grep -o '"resolution": "[0-9x]*"' "$GAMEDIR/.sc3u-install.json" 2>/dev/null | grep -o '[0-9]*x[0-9]*')}"; case "$RES" in 800x600|1024x768|1280x1024) ;; *) RES=1280x1024 ;; esac
+AUDIO="${SC3U_AUDIO:-auto}"; PERF="${SC3U_PERF-1000 512 10 10}"; CPUS="${SC3U_CPUS-2}"
+W="${RES%x*}"; H="${RES#*x}"
+UD="$HOME/.loki/sc3u"; LOG="$UD/last-run.log"; mkdir -p "$UD"
+
+warn() { echo "sc3u: $*" >&2; command -v notify-send >/dev/null && notify-send -i sc3u-linux-game "SimCity 3000" "$*" 2>/dev/null; true; }
+
+# --- missing game data: friendly message instead of a crash ---
+missing=""
+for f in sys/sys.pak res/ui res/sound buildings cities sc3u.ini; do [ -e "$GAMEDIR/$f" ] || missing="$missing $f"; done
+[ -x "$GAMEDIR/sc3u" ] && [ -e "$GAMEDIR/Loki_Compat/ld-linux.so.2" ] || missing="$missing runtime"
+if [ -n "$missing" ] && [ "$1" != "--inner" ]; then
+  echo "sc3u: game files missing:$missing" >&2
+  [ "${SC3U_CHECK_ONLY:-0}" = 1 ] && exit 3
+  MSG="The SimCity 3000 Unlimited game files are not installed yet.\n\nOpen SC3U Linux Installer and choose Add game files. You can use your ISO, the mounted disc, or a folder of copied disc files."
+  INST="$(command -v sc3u-linux-installer)"; [ -n "$INST" ] || INST="$(head -n1 "$GAMEDIR/.installer-cmd" 2>/dev/null)"
+  if [ -n "$INST" ] && [ -x "$INST" ]; then exec "$INST" --add-files
+  elif command -v zenity >/dev/null; then zenity --info --title="SC3U" --text="$MSG" 2>/dev/null
+  else warn "Game files missing. Open SC3U Linux Installer and choose Add game files."; fi
+  exit 3
+fi
+[ "${SC3U_CHECK_ONLY:-0}" = 1 ] && exit 0
+
+# --- inner stage: actually run the game (called directly or inside gamescope) ---
+if [ "$1" = "--inner" ]; then
+  shift
+  export SDL_VIDEODRIVER=x11 SDL_VIDEO_YUV_HWACCEL=0 SC3U_DATA="$GAMEDIR"
+  cd "$GAMEDIR" || exit 1
+  PIN=(); [ -n "$CPUS" ] && command -v taskset >/dev/null && PIN=(taskset -c "$CPUS")
+  # modern helpers (taskset) must NOT see the old Loki libc, so set LD_LIBRARY_PATH via env right before the loader
+  "${PIN[@]}" env LD_LIBRARY_PATH="$GAMEDIR/Loki_Compat" "$GAMEDIR/Loki_Compat/ld-linux.so.2" "./$BIN" "$@" &
+  GPID=$!
+  # Feral GameMode: gamemoderun's LD_PRELOAD cannot load into this 32-bit/old-glibc process,
+  # so register the game PID with the daemon instead (SC3U_GAMEMODE=0 disables)
+  GMP=; if [ "${SC3U_GAMEMODE:-1}" != 0 ] && command -v gamemoded >/dev/null; then gamemoded -r"$GPID" >/dev/null 2>&1 & GMP=$!; fi
+  trap 'kill -TERM $GPID 2>/dev/null' INT TERM
+  wait $GPID; RC=$?
+  [ -n "$GMP" ] && kill "$GMP" 2>/dev/null
+  # clean exit: Loki LinuxThreads sometimes leaves helper threads/processes behind -> reap them
+  pkill -TERM -P $$ 2>/dev/null; sleep 1; pkill -KILL -P $$ 2>/dev/null
+  exit $RC
+fi
+
+# --- audio (osspd /dev/dsp -> PipeWire) ---
+if [ "$AUDIO" != none ]; then
+  if [ -c /dev/dsp ] && [ -w /dev/dsp ]; then AUDIO=oss
+  else warn "No sound: /dev/dsp missing. Fix: sudo modprobe cuse && sudo systemctl enable --now osspd"; AUDIO=none; fi
+fi
+if [ "$AUDIO" = oss ]; then
+  export SDL_AUDIODRIVER=dsp
+  [ -e "$HOME/.openalrc" ] || printf "(define devices '(native))\n(define speaker-num 2)\n" > "$HOME/.openalrc"
+else unset SDL_AUDIODRIVER; GAMEARGS_AUDIO="-sound:off"; fi
+
+# --- language ---
+LANG=en
+for l in english-uk:en_UK german:de french:fr italian:it spanish:es dutch:nl swedish:sv portuguese:pt english:en; do
+  [ -d "$GAMEDIR/res/text/${l%%:*}" ] && LANG="${l#*:}"; done; export LANG
+
+# --- save backups (rotating, only inside ~/.loki/sc3u-backups) ---
+NB="${SC3U_BACKUPS:-10}"; BK="$HOME/.loki/sc3u-backups"
+if [ "$NB" -gt 0 ] 2>/dev/null && [ -d "$UD/cities" ]; then
+  mkdir -p "$BK"
+  tar -czf "$BK/cities-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$UD" cities 2>/dev/null
+  ls -1t "$BK"/cities-*.tar.gz 2>/dev/null | tail -n +$((NB+1)) | while read -r f; do rm -f -- "$f"; done
+fi
+
+# --- args ---
+ARGS=(); [ -n "$PERF" ] && ARGS+=(-p $PERF)
+[ "${SC3U_INTRO:-0}" = 1 ] || ARGS+=(-intro:off)
+[ -n "$GAMEARGS_AUDIO" ] && ARGS+=("$GAMEARGS_AUDIO")
+# shellcheck disable=SC2206
+ARGS+=($SC3U_ARGS)
+
+if [ "$MODE" = auto ]; then
+  if [ "$FS" = 0 ]; then MODE=window
+  elif command -v gamescope >/dev/null; then MODE=gamescope
+  else MODE=fullscreen; fi
+fi
+SCALE="${SC3U_SCALE:-$(grep -q '"stretch": true' "$GAMEDIR/.sc3u-install.json" 2>/dev/null && echo stretch || echo fit)}"
+# monitor size: mutter DisplayConfig (current mode of the first monitor), then xrandr, then 1920x1080
+read -r NW NH < <(gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig \
+  --method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null | grep -oE "[0-9]+, [0-9]+, [0-9.]+, [0-9.]+, \[[^]]*\], \{'is-current': <true>" | head -1 | awk -F', ' '{print $1, $2}')
+[ -n "$NW" ] || read -r NW NH < <(xrandr 2>/dev/null | awk '/ connected primary/{split($4,a,/[x+]/);print a[1],a[2];exit} / connected/{split($3,a,/[x+]/);print a[1],a[2];exit}')
+NW="${NW:-1920}"; NH="${NH:-1080}"
+
+# keep the game's own resolution pref (sc3.cfg: two uint32 after the cities path + 5 bytes) in sync with RES
+if [ -f "$UD/sc3.cfg" ] && command -v python3 >/dev/null; then
+  python3 - "$UD/sc3.cfg" "$W" "$H" <<'PY' 2>/dev/null
+import sys, struct
+f, w, h = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]); d = bytearray(open(f, "rb").read())
+k = b"/.loki/sc3u/cities/"; i = d.find(k)
+if i >= 0:
+    i += len(k) + 5; old = struct.unpack("<II", d[i:i + 8])
+    if old != (w, h) and old[0] in (0, 800, 1024, 1280): d[i:i + 8] = struct.pack("<II", w, h); open(f, "wb").write(d)
+PY
+fi
+echo "== $(date) mode=$MODE res=$RES native=${NW}x${NH} audio=$AUDIO cpus=$CPUS" > "$LOG"
+case "$MODE" in
+  gamescope)
+    GS=(gamescope -w "$W" -h "$H" -W "$NW" -H "$NH" -f -S "$SCALE" -F "${SC3U_FILTER:-pixel}" --force-grab-cursor)
+    T0=$(date +%s); "${GS[@]}" -- "$0" --inner -fullscreen "${ARGS[@]}" >>"$LOG" 2>&1; RC=$?
+    # gamescope failed to start (driver/compositor issue): fall back to a normal window
+    if [ "$RC" -ne 0 ] && [ $(( $(date +%s) - T0 )) -lt 5 ]; then
+      warn "Fullscreen (gamescope) failed, starting windowed."; "$0" --inner -windowed "${ARGS[@]}" >>"$LOG" 2>&1; RC=$?; fi ;;
+  fullscreen) "$0" --inner -fullscreen "${ARGS[@]}" >>"$LOG" 2>&1; RC=$? ;;
+  *)          "$0" --inner -windowed "${ARGS[@]}" >>"$LOG" 2>&1; RC=$? ;;
+esac
+if [ "$RC" -ne 0 ]; then
+  warn "Game exited with code $RC. Saves are backed up in $BK. Log: $LOG"
+fi
+exit 0

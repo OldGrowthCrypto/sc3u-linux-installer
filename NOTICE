@@ -1,0 +1,11 @@
+SC3U Linux Installer
+Copyright (C) 2026 Old Growth Crypto and contributors.
+Our own code (src/, data/, tools/, tests/) is licensed GPL-3.0-or-later, see COPYING.
+
+payload/ contains the Loki Software 2.0a update, the Spanish 2.0a update and the Loki
+compatibility libraries, redistributed as published by their authors. Those files remain
+under their original terms and are not covered by the GPL.
+
+Unofficial project. Not affiliated with or endorsed by Electronic Arts, Maxis or Loki Software.
+SimCity is a trademark of Electronic Arts Inc. and is used here only to describe compatibility.
+No game data is included. Users must own and supply their own copy of the Linux edition.

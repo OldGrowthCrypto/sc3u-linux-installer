@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SC3U Linux Installer
+Comment=Install SimCity 3000 Unlimited (Linux edition) from your own disc
+Exec=sc3u-linux-installer
+Icon=io.github.sc3u_linux_installer
+Terminal=false
+Categories=Game;Utility;
+Keywords=sc3u;simcity;installer;loki;
